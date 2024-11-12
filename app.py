@@ -4,12 +4,13 @@ import numpy as np
 from ultralytics import YOLO
 import pickle
 import time
+import os
 
 # Initialize Flask app
 app = Flask(__name__)
 
 # Load model paths from pickle file
-with open(r'C:\Users\HP\dustbin\models.pkl', 'rb') as f:
+with open('models.pkl', 'rb') as f:
     models = pickle.load(f)
 
 # Load YOLO models
@@ -80,4 +81,6 @@ def video_feed():
 
 # Start Flask app
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
+    # Dynamically set the port based on the environment (for Render deployment)
+    port = int(os.environ.get('PORT', 5000))  # Use the port from the environment or default to 5000
+    app.run(host='0.0.0.0', port=port, debug=True, threaded=True)
