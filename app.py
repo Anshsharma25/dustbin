@@ -9,12 +9,12 @@ import time
 app = Flask(__name__)
 
 # Load model paths from pickle file
-with open('model_paths.pkl', 'rb') as f:
-    model_paths = pickle.load(f)
+with open(r'C:\Users\HP\dustbin\models.pkl', 'rb') as f:
+    models = pickle.load(f)
 
 # Load YOLO models
-garbage_model = YOLO(model_paths['garbage_model_path'])
-dry_wet_model = YOLO(model_paths['dry_wet_model_path'])
+garbage_model = YOLO(models['garbage_model_path'])
+dry_wet_model = YOLO(models['dry_wet_model_path'])
 
 # ESP32-CAM stream URL
 ESP32_CAM_URL = "http://192.168.1.18/cam-hi.jpg"  # Replace with your ESP32-CAM URL
