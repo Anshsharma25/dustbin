@@ -4,6 +4,8 @@ from ultralytics import YOLO
 import pickle
 import time
 import os
+import numpy as np
+from sklearn.neighbors import KNeighborsRegressor 
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -17,11 +19,19 @@ garbage_model = YOLO(models['garbage_model_path'])
 dry_wet_model = YOLO(models['dry_wet_model_path'])
 
 # ESP32-CAM stream URL
-ESP32_CAM_URL = "http://192.168.1.18/cam-hi.jpg"  # Replace with your ESP32-CAM URL
+ESP32_CAM_URL = "http://192.168.1.9/cam-hi.jpg"  # Replace with your ESP32-CAM URL
 
 # Frame settings
 fps_limit = 10  # Limit FPS to reduce processing load
 last_frame_time = 0
+
+# Initialize KNN regressor for distance estimation
+bbox_size = np.array([[50, 50], [100, 100], [150, 150], [200, 200], [250, 250]])  # Example values
+distance = np.array([3, 2, 1.5, 1, 0.5])  # Corresponding distances in meters
+knn = KNeighborsRegressor(n_neighbors=3)
+knn.fit(bbox_size, distance)  # Train the KNN model
+
+boundary_distance = 1.0  # 1 meter
 
 # Function to fetch frames from ESP32-CAM
 def fetch_frame():
@@ -29,6 +39,58 @@ def fetch_frame():
     ret, frame = cap.read()
     cap.release()
     return frame if ret else None
+
+# Function to process frame
+def process_frame(frame):
+    # Perform garbage detection
+    garbage_results = garbage_model(frame)
+
+    # Draw bounding boxes, labels, and process dry/wet classification
+    for result in garbage_results:
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            conf = box.conf[0]
+            class_id = box.cls[0]
+
+            if conf < 0.5:  # Skip low-confidence detections
+                continue
+
+            # Draw bounding box for garbage detection
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+            cv2.putText(frame, f'{garbage_model.names[int(class_id)]} {conf:.2f}', 
+                        (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+            # Crop garbage detection box for dry/wet classification
+            cropped_garbage = frame[y1:y2, x1:x2]
+
+            # Perform dry/wet classification
+            dry_wet_results = dry_wet_model(cropped_garbage)
+            dry_wet_label = 'Common'
+            dry_wet_confidence = 0.0
+
+            for dw_result in dry_wet_results:
+                if len(dw_result.boxes) > 0:
+                    dw_class_id = dw_result.boxes[0].cls[0]
+                    dry_wet_label = dry_wet_model.names[int(dw_class_id)]
+                    dry_wet_confidence = dw_result.boxes[0].conf[0]
+
+            cv2.putText(frame, f"Dry/Wet: {dry_wet_label} ({dry_wet_confidence:.2f})", 
+                        (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+
+            # Predict distance using KNN
+            box_width = x2 - x1
+            box_height = y2 - y1
+            predicted_distance = knn.predict([[box_width, box_height]])[0]
+
+            # Draw distance information
+            if predicted_distance <= boundary_distance:
+                cv2.putText(frame, f"Inside 1m ({predicted_distance:.2f}m)", 
+                            (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            else:
+                cv2.putText(frame, f"Outside 1m ({predicted_distance:.2f}m)", 
+                            (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+    return frame
 
 # Function to generate video feed
 def generate_video():
@@ -47,21 +109,8 @@ def generate_video():
             time.sleep(0.5)
             continue
 
-        # Process frame with YOLO model
-        garbage_results = garbage_model(frame)
-
-        # Draw bounding boxes and labels on frame
-        for result in garbage_results:
-            for box in result.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = box.conf[0]
-                class_id = box.cls[0]
-
-                # Draw bounding box and label
-                color = (0, 255, 0) if conf >= 0.5 else (0, 0, 255)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                label = f'{garbage_model.names[int(class_id)]} {conf:.2f}'
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # Process the frame
+        frame = process_frame(frame)
 
         # Encode frame as JPEG
         ret, jpeg = cv2.imencode('.jpg', frame)
