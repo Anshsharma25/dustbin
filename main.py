@@ -1,14 +1,57 @@
 from flask import Flask, Response
-import cv2
 from ultralytics import YOLO
-import pickle
-import numpy as np
+import cv2
 import time
-import os
+import numpy as np
+import pickle
 from sklearn.neighbors import KNeighborsRegressor
+from pymongo import MongoClient
+from datetime import datetime, timezone
+from urllib.parse import quote_plus
+import requests
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# MongoDB Setup
+username = quote_plus("dustbin")  # Replace with your MongoDB username
+password = quote_plus("Dustbin@123")  # Replace with your MongoDB password
+MONGO_URI = f"mongodb+srv://{username}:{password}@cluster0.fmudd.mongodb.net/"
+DATABASE_NAME = "garbage_detection"
+COLLECTION_NAME = "detections"
+
+# Connect to MongoDB and create TTL index for automatic deletion
+try:
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client[DATABASE_NAME]
+    detections_collection = db[COLLECTION_NAME]
+    # Create TTL index on the 'timestamp' field to automatically delete documents after 2 hours (7200 seconds)
+    detections_collection.create_index("timestamp", expireAfterSeconds=7200)  # 2 hours
+    print("Connected to MongoDB successfully.")
+except Exception as e:
+    print(f"Error connecting to MongoDB: {e}")
+    exit()
+
+# Insert detection data into MongoDB
+def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, dry_wet_confidence, class_id, conf):
+    # Prepare the detection data to be inserted into MongoDB
+    timestamp = datetime.now(timezone.utc)  # Ensure the timestamp is timezone-aware (UTC)
+
+    detection_data = {
+        "object": garbage_model.names[int(class_id)],  # Object detected by the garbage model
+        "confidence": float(conf),  # Confidence of the detection
+        "distance": float(predicted_distance),  # Predicted distance from the object
+        "dry_wet_label": dry_wet_label,  # Dry/Wet classification label
+        "dry_wet_confidence": float(dry_wet_confidence),  # Confidence of the dry/wet classification
+        "timestamp": timestamp  # Timestamp of when the detection occurred (timezone-aware)
+    }
+
+    try:
+        # Insert data into MongoDB collection
+        detections_collection.insert_one(detection_data)
+        print("Detection data saved to MongoDB.")
+    except Exception as e:
+        print(f"Error saving data to MongoDB: {e}")
 
 # Load model paths from pickle file
 with open('models.pkl', 'rb') as f:
@@ -36,10 +79,14 @@ last_frame_time = 0
 
 # Function to fetch frames from ESP32-CAM
 def fetch_frame():
-    cap = cv2.VideoCapture(ESP32_CAM_URL)
-    ret, frame = cap.read()
-    cap.release()
-    return frame if ret else None
+    try:
+        response = requests.get(ESP32_CAM_URL, stream=True, timeout=5)
+        if response.status_code == 200:
+            img_array = np.asarray(bytearray(response.content), dtype=np.uint8)
+            return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    except Exception as e:
+        print(f"Error fetching frame: {e}")
+    return None
 
 # Function to draw a curved boundary line
 def draw_curved_boundary(frame):
@@ -82,6 +129,7 @@ def generate_video():
         garbage_count = 0
         closest_outside_distance = float('inf')
         closest_label = ""
+        dry_wet_confidence = 0.0  # Initialize variable
 
         for result in garbage_results:
             for box in result.boxes:
@@ -103,8 +151,6 @@ def generate_video():
                 # Perform dry/wet classification
                 dry_wet_results = dry_wet_model(cropped_garbage)
                 dry_wet_label = 'Common'
-                dry_wet_confidence = 0.0
-
                 for dw_result in dry_wet_results:
                     if len(dw_result.boxes) > 0:
                         dw_class_id = dw_result.boxes[0].cls[0]
@@ -131,30 +177,31 @@ def generate_video():
                         closest_outside_distance = predicted_distance
                         closest_label = dry_wet_label
 
-        # Draw the boundary line
+        # Save to MongoDB
+        detection_data = {
+            "timestamp": datetime.now(timezone.utc),  # Use timezone-aware UTC time for timestamp
+            "garbage_count": garbage_count,
+            "closest_outside_distance": closest_outside_distance,
+            "closest_label": closest_label
+        }
+        insert_detection_data(garbage_model, frame, closest_outside_distance, closest_label, dry_wet_confidence, class_id, conf)
+
+        # Draw curved boundary line
         frame = draw_curved_boundary(frame)
 
-        # Add garbage count
-        cv2.putText(frame, f"Garbage Count: {garbage_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        # Encode frame in JPEG format
+        _, jpeg = cv2.imencode('.jpg', frame)
+        frame = jpeg.tobytes()
 
-        # Encode frame as JPEG
-        ret, jpeg = cv2.imencode('.jpg', frame)
-        if ret:
-            frame_data = jpeg.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
 
-        # Update last frame time
         last_frame_time = current_time
 
-# Flask route to stream video feed
+# Route for video feed
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# Start Flask app
 if __name__ == '__main__':
-    # Dynamically set the port
-    port = int(os.environ.get('PORT', 5000))  # Use the port from the environment or default to 5000
-    app.run(host='0.0.0.0', port=port, debug=True, threaded=True)
- 
+    app.run(host="0.0.0.0", port=5000)
