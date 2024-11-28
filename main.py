@@ -35,15 +35,21 @@ except Exception as e:
 # Insert detection data into MongoDB
 def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, dry_wet_confidence, class_id, conf):
     # Prepare the detection data to be inserted into MongoDB
-    timestamp = datetime.now(timezone.utc)  # Ensure the timestamp is timezone-aware (UTC)
+    timestamp = datetime.now(timezone.utc).isoformat()  # Updated timestamp format: 2024-11-28T13:21:57.230+00:00
 
+    # If object is Dry Waste, change the object field to Garbage
+    object_name = garbage_model.names[int(class_id)]
+    if object_name == "Dry Waste":
+        object_name = "Garbage"
+
+    # Prepare the data dictionary
     detection_data = {
-        "object": garbage_model.names[int(class_id)],  # Object detected by the garbage model
+        "object": object_name,  # Set object name as Garbage if it's Dry Waste
         "confidence": float(conf),  # Confidence of the detection
         "distance": float(predicted_distance),  # Predicted distance from the object
         "dry_wet_label": dry_wet_label,  # Dry/Wet classification label
         "dry_wet_confidence": float(dry_wet_confidence),  # Confidence of the dry/wet classification
-        "timestamp": timestamp  # Timestamp of when the detection occurred (timezone-aware)
+        "timestamp": timestamp  # Timestamp of when the detection occurred
     }
 
     try:
@@ -71,10 +77,10 @@ knn.fit(bbox_size, distance)  # Train the KNN model
 boundary_distance = 1.0  # 1 meter
 
 # ESP32-CAM stream URL
-ESP32_CAM_URL = "http://192.168.1.9/cam-hi.jpg"  # Replace with your ESP32-CAM URL
+ESP32_CAM_URL = "http://192.168.1.100/cam-hi.jpg"  # Replace with your ESP32-CAM URL
 
 # Frame settings
-fps_limit = 10  # Limit FPS to reduce processing load
+fps_limit = 20  # Increase FPS limit for higher frame speed
 last_frame_time = 0
 
 # Function to fetch frames from ESP32-CAM
@@ -130,6 +136,8 @@ def generate_video():
         closest_outside_distance = float('inf')
         closest_label = ""
         dry_wet_confidence = 0.0  # Initialize variable
+        class_id = -1  # Default value for class_id
+        conf = 0.0  # Default value for confidence
 
         for result in garbage_results:
             for box in result.boxes:
@@ -173,35 +181,26 @@ def generate_video():
                     cv2.putText(frame, f"Outside 1m ({predicted_distance:.2f}m)", 
                                 (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                    if predicted_distance < closest_outside_distance:
-                        closest_outside_distance = predicted_distance
-                        closest_label = dry_wet_label
-
-        # Save to MongoDB
-        detection_data = {
-            "timestamp": datetime.now(timezone.utc),  # Use timezone-aware UTC time for timestamp
-            "garbage_count": garbage_count,
-            "closest_outside_distance": closest_outside_distance,
-            "closest_label": closest_label
-        }
-        insert_detection_data(garbage_model, frame, closest_outside_distance, closest_label, dry_wet_confidence, class_id, conf)
+                # Insert detection data to MongoDB
+                insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, 
+                                      dry_wet_confidence, class_id, conf)
 
         # Draw curved boundary line
         frame = draw_curved_boundary(frame)
 
-        # Encode frame in JPEG format
-        _, jpeg = cv2.imencode('.jpg', frame)
-        frame = jpeg.tobytes()
-
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
+        # Encode frame to JPEG
+        ret, jpeg = cv2.imencode('.jpg', frame)
+        if not ret:
+            continue
 
         last_frame_time = current_time
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
 
-# Route for video feed
+# Video route for Flask
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host='0.0.0.0', port=5000)
