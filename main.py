@@ -60,12 +60,12 @@ def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_labe
         print(f"Error saving data to MongoDB: {e}")
 
 # Load model paths from pickle file
-with open('models.pkl', 'rb') as f:
+with open('models_metadata.pkl', 'rb') as f:
     models = pickle.load(f)
 
 # Load YOLO models
-garbage_model = YOLO(models['garbage_model_path'])
-dry_wet_model = YOLO(models['dry_wet_model_path'])
+garbage_model = YOLO(models['garbage_model']['model_path'])
+dry_wet_model = YOLO(models['drywet_model']['model_path'])
 
 # KNN for distance estimation
 bbox_size = np.array([[50, 50], [100, 100], [150, 150], [200, 200], [250, 250]])  # Example values

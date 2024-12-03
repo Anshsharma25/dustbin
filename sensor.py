@@ -39,23 +39,52 @@ def store_data():
         data = request.json
 
         # Validate data: Check if all required fields are present
-        required_fields = ["moisture", "weight", "temperature", "humidity", "drynessPercentage", "wetnessPercentage", "classification"]
+        required_fields = ["moisture", "weight", "temperature", "humidity", "drynessPercentage", "wetnessPercentage", "classification", "distance"]
         if not all(field in data for field in required_fields):
             return jsonify({"error": "Missing required data fields"}), 400
 
-        # Add timestamp to the data (format as YYYY-MM-DD HH:MM:SS)
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Format as year-month-day hour:minute:second
-        data["timestamp"] = timestamp  # Store the formatted timestamp
+        # Extract distance from data (to determine sensor status)
+        distance = data["distance"]
 
-        # Insert data into MongoDB
-        result = detections_collection.insert_one(data)
+        # Add timestamp to the data in the format 'YYYY-MM-DD HH:MM:SS'
+        data["timestamp"] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # Respond with success
-        return jsonify({"message": "Data stored successfully", "id": str(result.inserted_id)}), 201
+        # Determine sensor state based on distance
+        if distance <= 0.5:
+            # Activate sensor if the distance is less than or equal to 0.5 meters
+            data["sensor_status"] = "Activated"
+            data["sensor_message"] = f"Distance: {distance} meters. Object detected within 0.5 meters. Activating sensors..."
+        else:
+            # Deactivate sensor if the distance is greater than 0.5 meters
+            data["sensor_status"] = "Deactivated"
+            data["sensor_message"] = f"Distance: {distance} meters. No object within 0.5 meters. Sensors deactivated."
+
+        # Add distance to the "distances" array in the database
+        if "distances" not in data:
+            data["distances"] = []
+        data["distances"].append(distance)
+
+        # Insert data into MongoDB only if sensor is activated
+        if data["sensor_status"] == "Activated":
+            result = detections_collection.insert_one(data)
+            return jsonify({
+                "message": "Data stored successfully", 
+                "id": str(result.inserted_id), 
+                "sensor_status": data["sensor_status"],
+                "sensor_message": data["sensor_message"],
+                "distances": data["distances"]
+            }), 201
+        else:
+            return jsonify({
+                "message": "No object detected within range. No data stored.",
+                "sensor_status": data["sensor_status"],
+                "sensor_message": data["sensor_message"]
+            }), 200
 
     except Exception as e:
         # Handle errors
         return jsonify({"error": str(e)}), 500
 
+# Run the Flask application
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='192.168.1.13', port=5003, debug=True)  # Replace '192.168.1.13' with your desired IP
