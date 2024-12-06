@@ -1,5 +1,3 @@
-#need to update this by %
-
 from flask import Flask, Response
 from ultralytics import YOLO
 import cv2
@@ -35,7 +33,7 @@ except Exception as e:
     exit()
 
 # Insert detection data into MongoDB
-def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, dry_wet_confidence, class_id, conf):
+def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, dry_wet_confidence, class_id, conf, dry_percent, wet_percent):
     # Prepare the detection data to be inserted into MongoDB
     timestamp = datetime.now(timezone.utc).isoformat()  # Updated timestamp format: 2024-11-28T13:21:57.230+00:00
 
@@ -51,6 +49,8 @@ def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_labe
         "distance": float(predicted_distance),  # Predicted distance from the object
         "dry_wet_label": dry_wet_label,  # Dry/Wet classification label
         "dry_wet_confidence": float(dry_wet_confidence),  # Confidence of the dry/wet classification
+        "dry_percent": dry_percent,  # Dry percentage
+        "wet_percent": wet_percent,  # Wet percentage
         "timestamp": timestamp  # Timestamp of when the detection occurred
     }
 
@@ -76,7 +76,7 @@ knn = KNeighborsRegressor(n_neighbors=3)
 knn.fit(bbox_size, distance)  # Train the KNN model
 
 # Define boundary parameters
-boundary_distance = 1.0  # 1 meter
+boundary_distance = 1.0  # 1 meter 
 
 # ESP32-CAM stream URL
 ESP32_CAM_URL = "http://192.168.1.100/cam-hi.jpg"  # Replace with your ESP32-CAM URL
@@ -140,6 +140,8 @@ def generate_video():
         dry_wet_confidence = 0.0  # Initialize variable
         class_id = -1  # Default value for class_id
         conf = 0.0  # Default value for confidence
+        dry_percent = 0.0  # Dry percentage
+        wet_percent = 0.0  # Wet percentage
 
         for result in garbage_results:
             for box in result.boxes:
@@ -166,8 +168,11 @@ def generate_video():
                         dw_class_id = dw_result.boxes[0].cls[0]
                         dry_wet_label = dry_wet_model.names[int(dw_class_id)]
                         dry_wet_confidence = dw_result.boxes[0].conf[0]
+                        wet_confidence = 1.0 - dry_wet_confidence
+                        dry_percent = dry_wet_confidence * 100
+                        wet_percent = wet_confidence * 100
 
-                cv2.putText(frame, f"Dry/Wet: {dry_wet_label} ({dry_wet_confidence:.2f})", 
+                cv2.putText(frame, f"Dry: {dry_percent:.2f}%, Wet: {wet_percent:.2f}%", 
                             (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
                 # Predict distance
@@ -185,24 +190,20 @@ def generate_video():
 
                 # Insert detection data to MongoDB
                 insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, 
-                                      dry_wet_confidence, class_id, conf)
+                                      dry_wet_confidence, class_id, conf, dry_percent, wet_percent)
 
         # Draw curved boundary line
         frame = draw_curved_boundary(frame)
 
-        # Encode frame to JPEG
-        ret, jpeg = cv2.imencode('.jpg', frame)
-        if not ret:
-            continue
-
-        last_frame_time = current_time
+        # Convert frame to JPEG and yield it as a response
+        _, jpeg = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
+               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
 
-# Video route for Flask
+# Video stream route
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_video(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5000)
