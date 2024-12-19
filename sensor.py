@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pymongo import MongoClient
+from flask_cors import CORS # type: ignore
+from pymongo import MongoClient # type: ignore
 import datetime
 from urllib.parse import quote_plus
 

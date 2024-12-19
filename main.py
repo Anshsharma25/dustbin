@@ -5,7 +5,7 @@ import time
 import numpy as np
 import pickle
 from sklearn.neighbors import KNeighborsRegressor
-from pymongo import MongoClient
+from pymongo import MongoClient # type: ignore
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 import requests

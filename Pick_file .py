@@ -7,7 +7,7 @@ garbage_model_metadata = {
 
 # Define metadata for dry/wet classification model
 drywet_model_metadata = {
-    "model_path": "Drybest.pt",
+    "model_path": "Main_DW.pt",
 }
 
 # Combine both models' metadata
