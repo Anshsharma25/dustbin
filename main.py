@@ -136,7 +136,7 @@ def generate_video():
         garbage_results = garbage_model(frame)
         garbage_count = 0
         closest_outside_distance = float('inf')
-        closest_label = ""
+        closest_label = "closest object"
         dry_wet_confidence = 0.0  # Initialize variable
         class_id = -1  # Default value for class_id
         conf = 0.0  # Default value for confidence
@@ -171,6 +171,11 @@ def generate_video():
                         wet_confidence = 1.0 - dry_wet_confidence
                         dry_percent = dry_wet_confidence * 100
                         wet_percent = wet_confidence * 100
+
+                # Check if common and not classified as dry or wet
+                if dry_wet_label == 'other':
+                    dry_percent = 0.0
+                    wet_percent = 0.0
 
                 cv2.putText(frame, f"Dry: {dry_percent:.2f}%, Wet: {wet_percent:.2f}%", 
                             (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
