@@ -9,9 +9,12 @@ app = Flask(__name__)
 CORS(app)  # Enable Cross-Origin Resource Sharing
 
 # MongoDB Setup
-username = quote_plus("dustbin")  # Replace with your MongoDB username
-password = quote_plus("Dustbin@123")  # Replace with your MongoDB password
-MONGO_URI = f"mongodb+srv://{username}:{password}@cluster0.fmudd.mongodb.net/"
+username = quote_plus("admin")  # Replace with your MongoDB username
+password = quote_plus("Mayank2503")  # Replace with your MongoDB password
+
+# MongoDB connection details
+host = "ec2-51-20-91-16.eu-north-1.compute.amazonaws.com"  # Update with the correct host
+MONGO_URI = f"mongodb+srv://{username}:{password}@{host}/"
 
 DATABASE_NAME = "garbage_detection"
 COLLECTION_NAME = "sensor_data"
