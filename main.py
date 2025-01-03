@@ -5,7 +5,7 @@ import time
 import numpy as np
 import pickle
 from sklearn.neighbors import KNeighborsRegressor
-from pymongo import MongoClient # type: ignore
+from pymongo import MongoClient
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 import requests
@@ -14,87 +14,54 @@ import requests
 app = Flask(__name__)
 
 # MongoDB Setup
-# MongoDB credentials
-username = quote_plus("admin")  # Replace with your MongoDB username
-password = quote_plus("Mayank2503")  # Replace with your MongoDB password
-
-# MongoDB connection details
-host = "ec2-51-20-91-16.eu-north-1.compute.amazonaws.com"  # Update with the correct host
-MONGO_URI = f"mongodb+srv://{username}:{password}@{host}/"
-
-'''username = quote_plus("dustbin")  # Replace with your MongoDB username
+username = quote_plus("dustbin")  # Replace with your MongoDB username
 password = quote_plus("Dustbin@123")  # Replace with your MongoDB password
-MONGO_URI = f"mongodb+srv://{username}:{password}@cluster0.fmudd.mongodb.net/" '''
-
+MONGO_URI = f"mongodb+srv://{username}:{password}@cluster0.fmudd.mongodb.net/"
 DATABASE_NAME = "garbage_detection"
 COLLECTION_NAME = "detections"
 
-# Connect to MongoDB and create TTL index for automatic deletion
+# Connect to MongoDB
 try:
     mongo_client = MongoClient(MONGO_URI)
     db = mongo_client[DATABASE_NAME]
     detections_collection = db[COLLECTION_NAME]
-    # Create TTL index on the 'timestamp' field to automatically delete documents after 2 hours (7200 seconds)
-    detections_collection.create_index("timestamp", expireAfterSeconds=7200)  # 2 hours
+    detections_collection.create_index("timestamp", expireAfterSeconds=7200)
     print("Connected to MongoDB successfully.")
 except Exception as e:
     print(f"Error connecting to MongoDB: {e}")
     exit()
 
-# Insert detection data into MongoDB
-def insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, dry_wet_confidence, class_id, conf, dry_percent, wet_percent):
-    # Prepare the detection data to be inserted into MongoDB
-    timestamp = datetime.now(timezone.utc).isoformat()  # Updated timestamp format: 2024-11-28T13:21:57.230+00:00
-
-    # If object is Dry Waste, change the object field to Garbage
-    object_name = garbage_model.names[int(class_id)]
-    if object_name == "Dry Waste":
-        object_name = "Garbage"
-
-    # Prepare the data dictionary
-    detection_data = {
-        "object": object_name,  # Set object name as Garbage if it's Dry Waste
-        "confidence": float(conf),  # Confidence of the detection
-        "distance": float(predicted_distance),  # Predicted distance from the object
-        "dry_wet_label": dry_wet_label,  # Dry/Wet classification label
-        "dry_wet_confidence": float(dry_wet_confidence),  # Confidence of the dry/wet classification
-        "dry_percent": dry_percent,  # Dry percentage
-        "wet_percent": wet_percent,  # Wet percentage
-        "timestamp": timestamp  # Timestamp of when the detection occurred
-    }
-
+# Function to insert detection data into MongoDB
+def insert_detection_data(data):
     try:
-        # Insert data into MongoDB collection
-        detections_collection.insert_one(detection_data)
+        detections_collection.insert_one(data)
         print("Detection data saved to MongoDB.")
     except Exception as e:
         print(f"Error saving data to MongoDB: {e}")
 
 # Load model paths from pickle file
-with open('models_metadata.pkl', 'rb') as f:
+with open('models_pickle.pkl', 'rb') as f:
     models = pickle.load(f)
 
-# Load YOLO models
+# Load YOLO models using the paths from the pickle metadata
 garbage_model = YOLO(models['garbage_model']['model_path'])
 dry_wet_model = YOLO(models['drywet_model']['model_path'])
+cover_noncover_model = YOLO(models['cover_uncover_model']['model_path'])
+polythene_nonpoly_model = YOLO(models['polythene_nonpoly_model']['model_path'])
 
 # KNN for distance estimation
-bbox_size = np.array([[50, 50], [100, 100], [150, 150], [200, 200], [250, 250]])  # Example values
-distance = np.array([3, 2, 1.5, 1, 0.5])  # Corresponding distances in meters
+bbox_size = np.array([[50, 50], [100, 100], [150, 150], [200, 200], [250, 250]])
+distance = np.array([3, 2, 1.5, 1, 0.5])
 knn = KNeighborsRegressor(n_neighbors=3)
-knn.fit(bbox_size, distance)  # Train the KNN model
+knn.fit(bbox_size, distance)
 
-# Define boundary parameters
-boundary_distance = 1.0  # 1 meter 
-
-# ESP32-CAM stream URL
-ESP32_CAM_URL = "http://192.168.1.100/cam-hi.jpg"  # Replace with your ESP32-CAM URL
-
-# Frame settings
-fps_limit = 20  # Increase FPS limit for higher frame speed
+# Constants
+boundary_distance = 1.0
+ESP32_CAM_URL = "http://192.168.1.100/cam-hi.jpg"
+fps_limit = 40
 last_frame_time = 0
 
-# Function to fetch frames from ESP32-CAM
+# Fetch frame from ESP32-CAM
 def fetch_frame():
     try:
         response = requests.get(ESP32_CAM_URL, stream=True, timeout=5)
@@ -105,17 +72,17 @@ def fetch_frame():
         print(f"Error fetching frame: {e}")
     return None
 
-# Function to draw a curved boundary line
+# Draw a curved boundary line
 def draw_curved_boundary(frame):
     frame_height, frame_width = frame.shape[:2]
-    curve_depth = 30  # Adjust depth of the curve
-    curve_center_y = frame_height // 2  # Midpoint height
+    curve_depth = 30
+    curve_center_y = frame_height // 2
 
     num_points = frame_width
     curve_points = []
 
     for x in range(num_points):
-        t = x / (frame_width - 1)  # Parameter from 0 to 1
+        t = x / (frame_width - 1)
         y = curve_center_y + int(curve_depth * np.sin(np.pi * t))
         curve_points.append((x, y))
 
@@ -124,7 +91,7 @@ def draw_curved_boundary(frame):
 
     return frame
 
-# Function to process and generate video feed
+# Process and generate video feed
 def generate_video():
     global last_frame_time
 
@@ -134,82 +101,81 @@ def generate_video():
             time.sleep(0.01)
             continue
 
-        # Fetch frame from ESP32-CAM
         frame = fetch_frame()
         if frame is None:
             print("Failed to fetch frame from ESP32-CAM.")
             time.sleep(0.5)
             continue
 
-        # Perform garbage detection
-        garbage_results = garbage_model(frame)
-        garbage_count = 0
-        closest_outside_distance = float('inf')
-        closest_label = "closest object"
-        dry_wet_confidence = 0.0  # Initialize variable
-        class_id = -1  # Default value for class_id
-        conf = 0.0  # Default value for confidence
-        dry_percent = 0.0  # Dry percentage
-        wet_percent = 0.0  # Wet percentage
-
+        # Detect garbage
+        garbage_results = garbage_model.predict(source=frame, conf=0.5, show=False)
         for result in garbage_results:
             for box in result.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = box.conf[0]
-                class_id = box.cls[0]
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                conf = box.conf[0].item()
+                class_id = box.cls[0].item()
 
-                if conf < 0.5:  # Filter low-confidence detections
+                if conf < 0.5:
                     continue
 
-                garbage_count += 1
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
-                cv2.putText(frame, f'{garbage_model.names[int(class_id)]} {conf:.2f}', 
-                            (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-
+                object_name = garbage_model.names[int(class_id)]
+                class_name_with_confidence = f"{object_name} ({int(conf * 100)}%)"
                 cropped_garbage = frame[y1:y2, x1:x2]
 
-                # Perform dry/wet classification
-                dry_wet_results = dry_wet_model(cropped_garbage)
-                dry_wet_label = 'Common'
-                for dw_result in dry_wet_results:
-                    if len(dw_result.boxes) > 0:
-                        dw_class_id = dw_result.boxes[0].cls[0]
-                        dry_wet_label = dry_wet_model.names[int(dw_class_id)]
-                        dry_wet_confidence = dw_result.boxes[0].conf[0]
-                        wet_confidence = 1.0 - dry_wet_confidence
-                        dry_percent = dry_wet_confidence * 100
-                        wet_percent = wet_confidence * 100
+                # Detect cover or uncover status
+                cover_results = cover_noncover_model.predict(source=cropped_garbage, conf=0.5, show=False)
+                cover_class = None
+                if cover_results and cover_results[0].boxes:
+                    cover_class = cover_noncover_model.names[int(cover_results[0].boxes[0].cls[0])]
 
-                # Check if common and not classified as dry or wet
-                if dry_wet_label == 'other':
-                    dry_percent = 0.0
-                    wet_percent = 0.0
+                # Detect polythene or non-polythene
+                poly_results = polythene_nonpoly_model.predict(source=cropped_garbage, conf=0.7, show=False)
+                poly_class = None
+                if poly_results and poly_results[0].boxes:
+                    poly_class = polythene_nonpoly_model.names[int(poly_results[0].boxes[0].cls[0])]
 
-                cv2.putText(frame, f"Dry: {dry_percent:.2f}%, Wet: {wet_percent:.2f}%", 
-                            (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                # Detect dry or wet
+                dry_wet_results = dry_wet_model.predict(source=cropped_garbage, conf=0.5, show=False)
+                dry_wet_class = None
+                if dry_wet_results and dry_wet_results[0].boxes:
+                    dry_wet_class = dry_wet_model.names[int(dry_wet_results[0].boxes[0].cls[0])]
 
-                # Predict distance
-                box_width = x2 - x1
-                box_height = y2 - y1
-                predicted_distance = knn.predict([[box_width, box_height]])[0]
+                # Estimate distance using KNN
+                bbox_width, bbox_height = x2 - x1, y2 - y1
+                estimated_distance = knn.predict([[bbox_width, bbox_height]])[0]
 
-                # Check boundary condition
-                if predicted_distance <= boundary_distance:
-                    cv2.putText(frame, f"Inside 1m ({predicted_distance:.2f}m)", 
-                                (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                else:
-                    cv2.putText(frame, f"Outside 1m ({predicted_distance:.2f}m)", 
-                                (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                # Save detection data to MongoDB
+                detection_data = {
+                    "object": object_name,
+                    "cover_status": cover_class if cover_class else "unknown",
+                    "poly_status": poly_class if poly_class else "unknown",
+                    "dry_wet_status": dry_wet_class if dry_wet_class else "unknown",
+                    "distance": estimated_distance,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+                insert_detection_data(detection_data)
 
-                # Insert detection data to MongoDB
-                insert_detection_data(garbage_model, frame, predicted_distance, dry_wet_label, 
-                                      dry_wet_confidence, class_id, conf, dry_percent, wet_percent)
+                # Draw bounding box and labels
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                cv2.putText(frame, class_name_with_confidence, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
-        # Draw curved boundary line
+                if cover_class:
+                    cv2.putText(frame, f"Cover: {cover_class}", (x1, y2 + 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                if poly_class:
+                    cv2.putText(frame, f"Poly: {poly_class}", (x1, y2 + 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                if dry_wet_class:
+                    cv2.putText(frame, f"{dry_wet_class}", (x1, y2 + 60),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                cv2.putText(frame, f"Distance: {estimated_distance:.2f}m", (x1, y2 + 80),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        # Draw boundary curve
         frame = draw_curved_boundary(frame)
 
-        # Convert frame to JPEG and yield it as a response
+        # Encode frame as JPEG and yield for video stream
         _, jpeg = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
